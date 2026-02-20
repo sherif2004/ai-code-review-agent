@@ -4,9 +4,10 @@ app = FastAPI()
 
 @app.get("/")
 def root():
-    return {"status": "running"}
+    return {"status": "kbhbhbgchg"}
 
 @app.post("/weook")
 async def webhook():
 
-    return {"received": True}
+    return {"reghvghvhgvgceived": True}
+
