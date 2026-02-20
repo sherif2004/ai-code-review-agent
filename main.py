@@ -5,57 +5,76 @@ from openai import OpenAI
 
 app = FastAPI()
 
+# Environment variables (set in Railway dashboard)
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+if not GITHUB_TOKEN:
+    raise ValueError("GITHUB_TOKEN not set")
+
+if not OPENAI_API_KEY:
+    raise ValueError("OPENAI_API_KEY not set")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 
-def fetch_pr_diff(repo, pr_number):
-    url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}"
+# -------------------------
+# GitHub API Functions
+# -------------------------
+
+def fetch_pr_diff(repo_full_name: str, pr_number: int):
+    url = f"https://api.github.com/repos/{repo_full_name}/pulls/{pr_number}"
+
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Accept": "application/vnd.github.v3.diff"
     }
 
-    r = requests.get(url, headers=headers, timeout=5)
-    if r.status_code != 200:
-        print("GitHub error:", r.text)
+    response = requests.get(url, headers=headers, timeout=10)
+
+    if response.status_code != 200:
+        print("Failed to fetch diff:", response.text)
         return None
 
-    return r.text
+    return response.text
 
 
-def post_comment(repo, pr_number, body):
-    url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
+def post_pr_comment(repo_full_name: str, pr_number: int, body: str):
+    url = f"https://api.github.com/repos/{repo_full_name}/issues/{pr_number}/comments"
 
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json"
+        "Accept": "application/vnd.github+json"
     }
 
     data = {"body": body}
 
-    r = requests.post(url, headers=headers, json=data)
-    print("Comment status:", r.status_code)
+    response = requests.post(url, headers=headers, json=data, timeout=10)
+
+    print("Comment response:", response.status_code)
 
 
-def review_with_llm(diff):
+# -------------------------
+# LLM Review
+# -------------------------
+
+def review_with_llm(diff_text: str):
     prompt = f"""
-    You are a senior software engineer.
+You are a senior software engineer.
 
-    Review the following GitHub PR diff.
+Review the following GitHub Pull Request diff.
 
-    Provide:
-    1. Issues
-    2. Improvements
-    3. Suggested refactoring (if needed)
+Provide:
+1. Code issues (if any)
+2. Improvements
+3. Refactoring suggestions
+4. A short summary
 
-    Return structured markdown.
+Return clean markdown.
 
-    Diff:
-    {diff[:6000]}
-    """
+Diff:
+{diff_text[:6000]}
+"""
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
@@ -66,33 +85,56 @@ def review_with_llm(diff):
     return response.choices[0].message.content
 
 
-def process_pr(payload):
+# -------------------------
+# Background Processing
+# -------------------------
+
+def process_pull_request(payload: dict):
     action = payload.get("action")
 
+    # Only react to relevant PR events
     if action not in ["opened", "synchronize", "reopened"]:
+        print("Ignored action:", action)
         return
 
     repo = payload["repository"]["full_name"]
     pr_number = payload["pull_request"]["number"]
 
-    print("Processing PR:", pr_number)
+    print(f"Processing PR #{pr_number} in {repo}")
 
+    # 1️⃣ Fetch diff
     diff = fetch_pr_diff(repo, pr_number)
     if not diff:
+        print("No diff found")
         return
 
+    print("Diff fetched successfully")
+
+    # 2️⃣ Send to LLM
     review = review_with_llm(diff)
 
-    post_comment(repo, pr_number, review)
+    print("LLM review generated")
 
+    # 3️⃣ Post comment
+    post_pr_comment(repo, pr_number, review)
+
+    print("Comment posted successfully")
+
+
+# -------------------------
+# FastAPI Routes
+# -------------------------
 
 @app.get("/")
-def health():
-    return {"status": "running"}
+def health_check():
+    return {"status": "AI Code Review Agent Running"}
 
 
 @app.post("/webhook")
-async def webhook(request: Request, background_tasks: BackgroundTasks):
+async def github_webhook(request: Request, background_tasks: BackgroundTasks):
     payload = await request.json()
-    background_tasks.add_task(process_pr, payload)
+
+    # Run heavy logic in background to avoid GitHub timeout
+    background_tasks.add_task(process_pull_request, payload)
+
     return {"status": "processing"}
