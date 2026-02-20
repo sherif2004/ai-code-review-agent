@@ -1,6 +1,6 @@
-# AI Code Review Agent
+# AI Code Review Agent by sherif
 
-An automated AI-powered code review system that analyzes GitHub Pull Requests,
+An\\ automated AI-powered code review system that analyzes GitHub Pull Requests,
 generates structured feedback using LLMs, and posts review comments directly on PRs.
 
 Built with FastAPI and GitHub Webhooks.
