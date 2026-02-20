@@ -6,6 +6,7 @@ app = FastAPI()
 def root():
     return {"status": "running"}
 
-@app.post("/webhook")
+@app.post("/weook")
 async def webhook():
+
     return {"received": True}
