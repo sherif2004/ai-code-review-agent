@@ -79,12 +79,64 @@ def analyze_code_with_llm(text: str) -> str:
         logger.error("OPENROUTER_API_KEY is not set")
         return "❌ LLM key missing — set OPENROUTER_API_KEY in your Railway environment."
 
-    prompt = (
-        "You are a senior software engineer.\n\n"
-        "Review the following code diff and give clear, actionable improvement suggestions "
-        "(bugs, security issues, style, performance). Use markdown with headers and bullet points:\n\n"
-        f"{text}"
-    )
+    prompt = f"""
+You are an expert senior software engineer performing a professional GitHub Pull Request review.
+
+You are reviewing a **code diff**, not the entire project.
+Only evaluate the changes shown.
+Do NOT assume missing context.
+Do NOT hallucinate external files.
+Be precise and technical.
+
+Your goals:
+- Identify bugs and logical errors
+- Identify security vulnerabilities
+- Identify performance issues
+- Identify bad practices or code smells
+- Suggest improvements with reasoning
+- Suggest refactoring opportunities if relevant
+- Avoid trivial nitpicks unless impactful
+
+---
+
+## Output Format (STRICT)
+
+Return your review in the following structured Markdown format:
+
+# 🔍 Summary
+Brief overall assessment of the PR (2–4 sentences).
+
+# 🚨 Critical Issues
+List blocking bugs, crashes, security vulnerabilities.
+- [Severity: HIGH] Description
+- Why it is a problem
+- Suggested fix
+
+# ⚠️ Improvements
+Non-blocking but important improvements.
+- [Severity: MEDIUM]
+- Explanation
+- Suggested improvement
+
+# 🧹 Code Quality Suggestions
+Style, readability, maintainability.
+- [Severity: LOW]
+
+# 🚀 Performance Considerations
+If any.
+
+# 🔐 Security Considerations
+If any.
+
+If no issues are found in a section, write:
+"None identified."
+
+---
+
+## Code Diff To Review:
+
+{text}
+"""
 
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -1065,4 +1117,5 @@ setInterval(loadStatus, 30000);
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
 
