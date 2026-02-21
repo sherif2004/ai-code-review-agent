@@ -19,7 +19,7 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 TEST_MODE          = os.getenv("TEST_MODE", "false").lower() == "true"
 WEBHOOK_SECRET     = os.getenv("WEBHOOK_SECRET", "")
 OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "mistralai/mistral-7b-instruct")
+OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "minimax/minimax-m2.5")
 
 LLM_TIMEOUT_SECONDS    = int(os.getenv("LLM_TIMEOUT", "60"))
 GITHUB_TIMEOUT_SECONDS = 15
@@ -1065,3 +1065,4 @@ setInterval(loadStatus, 30000);
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
