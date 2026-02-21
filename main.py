@@ -204,99 +204,38 @@ def process_pr(payload: dict):
 # =========================================================
 # WEBHOOK
 # =========================================================
+from fastapi import HTTPException
 
 @app.post("/webhook")
 async def webhook(request: Request, background_tasks: BackgroundTasks):
 
     body = await request.body()
 
+    # 1️⃣ Ensure body exists
     if not body:
-        return {"status": "no payload provided"}
+        raise HTTPException(
+            status_code=400,
+            detail="Request body is required"
+        )
 
+    # 2️⃣ Ensure valid JSON
     try:
         payload = await request.json()
     except Exception:
-        return {"status": "invalid json format"}
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid JSON format"
+        )
 
     logger.info("Webhook received")
 
-    if "pull_request" in payload:
-        background_tasks.add_task(process_pr, payload)
-        return {"status": "processing"}
+    # 3️⃣ Ensure it's a PR event
+    if "pull_request" not in payload:
+        return {"status": "not a pull request event"}
 
-    return {"status": "received"}
+    background_tasks.add_task(process_pr, payload)
 
-@app.get("/ui", response_class=HTMLResponse)
-def ui():
-    return """
-    <html>
-        <head>
-            <title>AI Code Review Agent</title>
-            <style>
-                body {
-                    font-family: Arial;
-                    background-color: #f4f6f8;
-                    padding: 40px;
-                }
-                textarea {
-                    width: 100%;
-                    height: 200px;
-                    padding: 10px;
-                    font-family: monospace;
-                }
-                button {
-                    padding: 10px 20px;
-                    margin-top: 10px;
-                    font-size: 16px;
-                    cursor: pointer;
-                }
-                .output {
-                    margin-top: 20px;
-                    background: white;
-                    padding: 20px;
-                    border-radius: 6px;
-                    white-space: pre-wrap;
-                }
-            </style>
-        </head>
-        <body>
-            <h1>AI Code Review Agent</h1>
-
-            <textarea id="codeInput" placeholder="Paste your code here..."></textarea>
-            <br>
-            <button onclick="analyze()">Analyze Code</button>
-
-            <div class="output" id="output"></div>
-
-            <script>
-                async function analyze() {
-                    const code = document.getElementById("codeInput").value;
-
-                    const response = await fetch("/analyze-ui", {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json"
-                        },
-                        body: JSON.stringify({ code: code })
-                    });
-
-                    const data = await response.json();
-                    document.getElementById("output").innerText = data.result;
-                }
-            </script>
-        </body>
-    </html>
-    """
-
-from pydantic import BaseModel
-
-class CodeInput(BaseModel):
-    code: str
-
-@app.post("/analyze-ui")
-def analyze_ui(input_data: CodeInput):
-    result = analyze_code_with_llm(input_data.code)
-    return {"result": result}
+    return {"status": "processing"}
 
 # =========================================================
 # ENTRY POINT
@@ -305,4 +244,5 @@ def analyze_ui(input_data: CodeInput):
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
 
