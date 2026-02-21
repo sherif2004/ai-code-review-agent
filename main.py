@@ -205,14 +205,40 @@ def process_pr(payload: dict):
 # WEBHOOK
 # =========================================================
 from fastapi import HTTPException
+def run_full_pr_flow(payload: dict):
+
+    repo = payload["repository"]["full_name"]
+    pr_number = payload["pull_request"]["number"]
+
+    files = fetch_pr_files(repo, pr_number)
+
+    if not files:
+        return "No files found."
+
+    combined_patch = ""
+
+    for file in files:
+        patch = file.get("patch")
+        if patch:
+            combined_patch += f"\n\nFile: {file['filename']}\n{patch}"
+
+    if not combined_patch:
+        return "No patch content."
+
+    review = analyze_code_with_llm(combined_patch)
+
+    return review
+
 @app.post("/webhook")
-async def webhook(request: Request, background_tasks: BackgroundTasks):
+async def webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    debug: bool = False
+):
 
     body = await request.body()
 
-    # Accept empty request as test
     if not body:
-        logger.info("Empty test request received.")
         return {"status": "ok (empty test request)"}
 
     try:
@@ -222,11 +248,23 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
 
     logger.info("Webhook received")
 
-    if "pull_request" in payload:
-        background_tasks.add_task(process_pr, payload)
-        return {"status": "processing"}
+    if "pull_request" not in payload:
+        return {"status": "not a PR event"}
 
-    return {"status": "received"}
+    # If debug mode → run synchronously and return LLM output
+    if debug:
+        logger.info("Debug mode enabled — running synchronously")
+
+        review = run_full_pr_flow(payload)  # new helper function
+
+        return {
+            "status": "debug completed",
+            "llm_review": review
+        }
+
+    # Normal production behavior
+    background_tasks.add_task(process_pr, payload)
+    return {"status": "processing"}
 # =========================================================
 # ENTRY POINT
 # =========================================================
@@ -234,6 +272,7 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
 
 
 
