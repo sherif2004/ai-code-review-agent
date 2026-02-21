@@ -12,7 +12,6 @@ import uvicorn
 
 GITHUB_TOKEN       = os.getenv("GITHUB_TOKEN")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-WEBHOOK_SECRET     = os.getenv("WEBHOOK_SECRET", "")       # Optional but recommended
 TEST_MODE          = os.getenv("TEST_MODE", "false").lower() == "true"
 
 OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
@@ -297,3 +296,4 @@ def test_pr(repo: str, pr: int):
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
