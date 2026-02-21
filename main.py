@@ -213,10 +213,8 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
 
     # 1️⃣ Ensure body exists
     if not body:
-        raise HTTPException(
-            status_code=400,
-            detail="Request body is required"
-        )
+    logger.info("Empty webhook request ignored.")
+    return {"status": "ignored"}
 
     # 2️⃣ Ensure valid JSON
     try:
@@ -244,5 +242,6 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
 
 
