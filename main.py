@@ -205,36 +205,39 @@ def process_pr(payload: dict):
 # WEBHOOK
 # =========================================================
 from fastapi import HTTPException
-
 @app.post("/webhook")
 async def webhook(request: Request, background_tasks: BackgroundTasks):
 
     body = await request.body()
 
-    # 1️⃣ Ensure body exists
+    # 1️⃣ Ignore completely empty requests (avoid 400 spam)
     if not body:
-    logger.info("Empty webhook request ignored.")
-    return {"status": "ignored"}
+        logger.info("Empty webhook request ignored.")
+        return {"status": "ignored"}
 
-    # 2️⃣ Ensure valid JSON
+    # 2️⃣ Parse JSON safely
     try:
         payload = await request.json()
     except Exception:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid JSON format"
-        )
+        logger.warning("Invalid JSON received.")
+        return {"status": "invalid json"}
 
     logger.info("Webhook received")
 
-    # 3️⃣ Ensure it's a PR event
-    if "pull_request" not in payload:
-        return {"status": "not a pull request event"}
+    # 3️⃣ Handle GitHub ping event explicitly
+    if payload.get("zen"):  # GitHub ping contains 'zen'
+        logger.info("GitHub ping event received.")
+        return {"status": "pong"}
 
+    # 4️⃣ Only process Pull Request events
+    if "pull_request" not in payload:
+        logger.info("Non-PR event ignored.")
+        return {"status": "not a PR event"}
+
+    # 5️⃣ Process PR in background
     background_tasks.add_task(process_pr, payload)
 
     return {"status": "processing"}
-
 # =========================================================
 # ENTRY POINT
 # =========================================================
@@ -242,6 +245,7 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
 
 
 
