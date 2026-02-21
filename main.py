@@ -846,11 +846,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <div class="stat-value" id="sTest">—</div>
       </div>
     </div>
-    <br/>
-    <button class="btn btn-secondary" onclick="testLLM()" id="testLLMBtn">
-      <div class="spinner" id="llmSpinner" style="border-top-color: var(--accent2);"></div>
-      <span id="testBtnText">🧪 Smoke-test LLM</span>
-    </button>
+
   </div>
 
   <!-- ── Review Output ── -->
@@ -986,26 +982,6 @@ async function runReview() {
     alert('Request failed: ' + e.message);
   } finally {
     setLoading('reviewBtn', 'reviewSpinner', 'reviewBtnText', false, '▶ Run Review');
-  }
-}
-
-// ── Smoke test LLM ──
-async function testLLM() {
-  setLoading('testLLMBtn', 'llmSpinner', 'testBtnText', true, 'Testing…');
-  try {
-    const res  = await fetch('/api/test-llm');
-    const data = await res.json();
-
-    const card = document.getElementById('reviewOutputCard');
-    card.style.display = 'block';
-    document.getElementById('prMetaBar').style.display = 'none';
-    document.getElementById('reviewStatusBadge').innerHTML =
-      `<div class="status-badge badge-ok">🧪 LLM Smoke Test — ${data.duration_s}s</div>`;
-    document.getElementById('reviewOutput').innerHTML = renderMarkdown(data.llm_response);
-  } catch(e) {
-    alert('Test failed: ' + e.message);
-  } finally {
-    setLoading('testLLMBtn', 'llmSpinner', 'testBtnText', false, '🧪 Smoke-test LLM');
   }
 }
 
