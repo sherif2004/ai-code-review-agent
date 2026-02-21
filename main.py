@@ -225,48 +225,61 @@ def verify_signature(body: bytes, signature_header: str | None) -> bool:
 # =========================================================
 # WEBHOOK ENDPOINT
 # =========================================================
+from pydantic import BaseModel
+from typing import Optional, Dict, Any
+class Repository(BaseModel):
+    full_name: str
 
+class PullRequest(BaseModel):
+    number: int
+
+class WebhookPayload(BaseModel):
+    action: Optional[str] = None
+    repository: Optional[Repository] = None
+    pull_request: Optional[PullRequest] = None
 @app.post("/webhook")
-async def webhook(request: Request, background_tasks: BackgroundTasks, debug: bool = False):
-    body = await request.body()
+async def webhook(
+    payload: WebhookPayload,
+    background_tasks: BackgroundTasks,
+    debug: bool = False
+):
+    """
+    GitHub Webhook Endpoint
+    """
 
-    # ✅ FIX: return a proper 400 instead of a silent "ok" on empty body
-    if not body:
-        raise HTTPException(
-            status_code=400,
-            detail="Empty request body. Send a real GitHub webhook payload."
-        )
+    # Validate PR event
+    if not payload.pull_request or not payload.repository:
+        return {
+            "status": "ignored",
+            "reason": "not a pull_request event"
+        }
 
-    # Validate GitHub webhook signature if secret is set
-    signature = request.headers.get("X-Hub-Signature-256")
-    if not verify_signature(body, signature):
-        logger.warning("Invalid webhook signature — request rejected")
-        raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+    repo = payload.repository.full_name
+    pr_number = payload.pull_request.number
+    action = payload.action
 
-    try:
-        payload = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON body.")
-
-    if "pull_request" not in payload:
-        return {"status": "ignored", "reason": "not a pull_request event"}
-
-    repo      = payload["repository"]["full_name"]
-    pr_number = payload["pull_request"]["number"]
-    action    = payload.get("action")
-
-    logger.info("Webhook received | repo=%s | PR=#%d | action=%s", repo, pr_number, action)
+    logger.info(
+        "Webhook received | repo=%s | PR=#%d | action=%s",
+        repo,
+        pr_number,
+        action
+    )
 
     if debug:
-        # Synchronous path — useful for testing; returns LLM output directly
         logger.info("Debug mode — running synchronously")
         review = review_pr(repo, pr_number)
-        return {"status": "debug_complete", "pr": pr_number, "llm_review": review}
+        return {
+            "status": "debug_complete",
+            "pr": pr_number,
+            "llm_review": review
+        }
 
-    # Normal production path — run in background so GitHub doesn't time out
-    background_tasks.add_task(process_pr, payload)
-    return {"status": "processing", "pr": pr_number, "action": action}
-
+    background_tasks.add_task(process_pr, payload.model_dump())
+    return {
+        "status": "processing",
+        "pr": pr_number,
+        "action": action
+    }
 # =========================================================
 # TEST ENDPOINTS
 # =========================================================
@@ -296,3 +309,4 @@ def test_pr(repo: str, pr: int):
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
