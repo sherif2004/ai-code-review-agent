@@ -13,7 +13,7 @@ import uvicorn
 GITHUB_TOKEN       = os.getenv("GITHUB_TOKEN")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 TEST_MODE          = os.getenv("TEST_MODE", "false").lower() == "true"
-
+WEBHOOK_SECRET     = os.getenv("WEBHOOK_SECRET", "")       # Optional but recommended
 OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_MODEL   = "mistralai/mistral-7b-instruct"
 
