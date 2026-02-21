@@ -1,7 +1,7 @@
 import os
-import logging
 import hashlib
 import hmac
+import logging
 import requests
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 import uvicorn
@@ -12,13 +12,16 @@ import uvicorn
 
 GITHUB_TOKEN       = os.getenv("GITHUB_TOKEN")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+WEBHOOK_SECRET     = os.getenv("WEBHOOK_SECRET", "")        # Optional but recommended
 TEST_MODE          = os.getenv("TEST_MODE", "false").lower() == "true"
-WEBHOOK_SECRET     = os.getenv("WEBHOOK_SECRET", "")       # Optional but recommended
+
 OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_MODEL   = "mistralai/mistral-7b-instruct"
 
-LLM_TIMEOUT_SECONDS    = 60   # ✅ FIX: was missing entirely — caused silent hangs
+LLM_TIMEOUT_SECONDS    = 60
 GITHUB_TIMEOUT_SECONDS = 15
+
+ALLOWED_ACTIONS = {"opened", "synchronize", "reopened"}
 
 # =========================================================
 # LOGGING
@@ -26,7 +29,7 @@ GITHUB_TIMEOUT_SECONDS = 15
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
 
@@ -39,11 +42,12 @@ app = FastAPI(title="AI Code Review Agent")
 @app.get("/")
 def health():
     return {
-        "status": "running",
-        "test_mode": TEST_MODE,
-        "model": OPENROUTER_MODEL,
-        "github_token_set": bool(GITHUB_TOKEN),
+        "status":             "running",
+        "test_mode":          TEST_MODE,
+        "model":              OPENROUTER_MODEL,
+        "github_token_set":   bool(GITHUB_TOKEN),
         "openrouter_key_set": bool(OPENROUTER_API_KEY),
+        "webhook_secret_set": bool(WEBHOOK_SECRET),
     }
 
 # =========================================================
@@ -74,35 +78,37 @@ def analyze_code_with_llm(text: str) -> str:
         "messages": [{"role": "user", "content": prompt}],
     }
 
-    logger.info("Sending request to OpenRouter | model=%s | prompt_chars=%d", OPENROUTER_MODEL, len(prompt))
+    logger.info(
+        "[llm] Sending request | model=%s | prompt_chars=%d",
+        OPENROUTER_MODEL, len(prompt),
+    )
 
     try:
-        # ✅ FIX: timeout added — this was the root cause of silent hangs
         response = requests.post(
             OPENROUTER_URL,
             headers=headers,
             json=payload,
-            timeout=LLM_TIMEOUT_SECONDS,
+            timeout=LLM_TIMEOUT_SECONDS,      # ✅ FIX: was missing — caused silent hangs
         )
     except requests.Timeout:
-        logger.error("OpenRouter request timed out after %ds", LLM_TIMEOUT_SECONDS)
+        logger.error("[llm] Request timed out after %ds", LLM_TIMEOUT_SECONDS)
         return f"❌ LLM request timed out after {LLM_TIMEOUT_SECONDS}s."
     except requests.RequestException as e:
-        logger.error("OpenRouter connection error: %s", e)
+        logger.error("[llm] Connection error: %s", e)
         return f"❌ LLM connection error: {e}"
 
-    logger.info("OpenRouter response status: %d", response.status_code)
+    logger.info("[llm] Response status: %d", response.status_code)
 
     if response.status_code != 200:
-        logger.error("OpenRouter error body: %s", response.text)
+        logger.error("[llm] Error body: %s", response.text)
         return f"❌ LLM call failed (HTTP {response.status_code}): {response.text}"
 
     try:
         output = response.json()["choices"][0]["message"]["content"]
-        logger.info("LLM response received successfully (%d chars)", len(output))
+        logger.info("[llm] Response received successfully (%d chars)", len(output))
         return output
     except (KeyError, IndexError) as e:
-        logger.error("Unexpected OpenRouter response format: %s | raw: %s", e, response.text)
+        logger.error("[llm] Unexpected response format: %s | raw: %s", e, response.text)
         return "❌ LLM returned an unexpected response format."
 
 # =========================================================
@@ -117,23 +123,30 @@ def _github_headers() -> dict:
 
 def fetch_pr_files(repo_full_name: str, pr_number: int) -> list | None:
     if not GITHUB_TOKEN:
-        logger.error("GITHUB_TOKEN is not set")
+        logger.error("[github] GITHUB_TOKEN is not set")
         return None
 
     url = f"https://api.github.com/repos/{repo_full_name}/pulls/{pr_number}/files"
 
     try:
-        response = requests.get(url, headers=_github_headers(), timeout=GITHUB_TIMEOUT_SECONDS)
+        response = requests.get(
+            url,
+            headers=_github_headers(),
+            timeout=GITHUB_TIMEOUT_SECONDS,   # ✅ FIX: was missing
+        )
     except requests.RequestException as e:
-        logger.error("GitHub API connection error: %s", e)
+        logger.error("[github] Connection error fetching PR files: %s", e)
         return None
 
     if response.status_code != 200:
-        logger.error("GitHub API error (HTTP %d): %s", response.status_code, response.text)
+        logger.error(
+            "[github] API error (HTTP %d): %s",
+            response.status_code, response.text,
+        )
         return None
 
     files = response.json()
-    logger.info("Fetched %d file(s) from PR #%d", len(files), pr_number)
+    logger.info("[github] Fetched %d file(s) from PR #%d", len(files), pr_number)
     return files
 
 def post_pr_comment(repo_full_name: str, pr_number: int, comment: str) -> bool:
@@ -144,26 +157,28 @@ def post_pr_comment(repo_full_name: str, pr_number: int, comment: str) -> bool:
             url,
             headers=_github_headers(),
             json={"body": comment},
-            timeout=GITHUB_TIMEOUT_SECONDS,
+            timeout=GITHUB_TIMEOUT_SECONDS,   # ✅ FIX: was missing
         )
     except requests.RequestException as e:
-        logger.error("GitHub comment post connection error: %s", e)
+        logger.error("[github] Connection error posting comment: %s", e)
         return False
 
     if response.status_code != 201:
-        logger.error("Failed to post comment (HTTP %d): %s", response.status_code, response.text)
+        logger.error(
+            "[github] Failed to post comment (HTTP %d): %s",
+            response.status_code, response.text,
+        )
         return False
 
-    logger.info("Comment posted to PR #%d successfully", pr_number)
+    logger.info("[github] Comment posted to PR #%d successfully", pr_number)
     return True
 
 # =========================================================
-# CORE PR PROCESSING (shared by background + debug mode)
-# ✅ FIX: eliminated code duplication between process_pr and run_full_pr_flow
+# CORE REVIEW LOGIC  (shared by /webhook background task + /test-pr)
 # =========================================================
 
 def build_patch_from_files(files: list) -> str:
-    """Combine all file patches into a single diff string."""
+    """Combine all file patches into one diff string."""
     combined = ""
     for f in files:
         patch = f.get("patch")
@@ -173,8 +188,8 @@ def build_patch_from_files(files: list) -> str:
 
 def review_pr(repo: str, pr_number: int) -> str:
     """
-    Fetch PR files, build the patch, and get LLM review.
-    Returns the review string (or an error message).
+    Fetch PR files → build patch → ask LLM → return review text.
+    Single source of truth — used by both the webhook and /test-pr.
     """
     files = fetch_pr_files(repo, pr_number)
     if not files:
@@ -184,88 +199,203 @@ def review_pr(repo: str, pr_number: int) -> str:
     if not patch:
         return "⚠️ No patchable content found in this PR (maybe only binary files)."
 
-    logger.info("Patch built: %d chars for PR #%d", len(patch), pr_number)
+    logger.info(
+        "[review] Patch built: %d chars | repo=%s | PR=#%d",
+        len(patch), repo, pr_number,
+    )
     return analyze_code_with_llm(patch)
 
+# =========================================================
+# BACKGROUND WRAPPER
+# =========================================================
+
 def process_pr(payload: dict):
-    """Background task: process PR webhook and post comment."""
-    action = payload.get("action")
-    if action not in ("opened", "synchronize", "reopened"):
-        logger.info("Skipped webhook action: %s", action)
-        return
+    """
+    Background task. Wraps review_pr() with:
+      - Defensive field extraction with individual warnings
+      - Action allow-list filtering
+      - Full exception capture — errors are NEVER silent
+    """
+    try:
+        # ── Defensive extraction ──────────────────────────────────────
+        action = payload.get("action")
+        if not action:
+            logger.warning("[process_pr] Missing 'action' field — skipping")
+            return
 
-    repo      = payload["repository"]["full_name"]
-    pr_number = payload["pull_request"]["number"]
-    logger.info("Background processing PR #%d in %s (action=%s)", pr_number, repo, action)
+        pull_request = payload.get("pull_request")
+        if not pull_request:
+            logger.warning("[process_pr] Missing 'pull_request' field — skipping")
+            return
 
-    if TEST_MODE:
-        logger.info("TEST_MODE=true — skipping LLM call and comment posting")
-        return
+        repository = payload.get("repository")
+        if not repository or not repository.get("full_name"):
+            logger.warning("[process_pr] Missing 'repository.full_name' — skipping")
+            return
 
-    review = review_pr(repo, pr_number)
-    logger.info("Posting review comment to PR #%d...", pr_number)
-    post_pr_comment(repo, pr_number, review)
-    logger.info("Background processing complete for PR #%d", pr_number)
+        repo      = repository["full_name"]
+        pr_number = pull_request.get("number")
+
+        if not pr_number:
+            logger.warning("[process_pr] Missing 'pull_request.number' — skipping")
+            return
+
+        # ── Action guard ──────────────────────────────────────────────
+        if action not in ALLOWED_ACTIONS:
+            logger.info(
+                "[process_pr] Skipped | repo=%s | PR=#%d | action=%s (not in allowed set)",
+                repo, pr_number, action,
+            )
+            return
+
+        logger.info(
+            "[process_pr] Starting | repo=%s | PR=#%d | action=%s",
+            repo, pr_number, action,
+        )
+
+        # ── TEST_MODE guard ───────────────────────────────────────────
+        if TEST_MODE:
+            logger.info("[process_pr] TEST_MODE=true — skipping LLM and comment posting")
+            return
+
+        # ── Run review and post comment ───────────────────────────────
+        review = review_pr(repo, pr_number)
+        posted = post_pr_comment(repo, pr_number, review)
+
+        if posted:
+            logger.info(
+                "[process_pr] Done | repo=%s | PR=#%d | comment posted ✓",
+                repo, pr_number,
+            )
+        else:
+            logger.error(
+                "[process_pr] Review generated but comment post failed | repo=%s | PR=#%d",
+                repo, pr_number,
+            )
+
+    except Exception:
+        # logger.exception always includes the full traceback
+        logger.exception("[process_pr] Unhandled exception during background processing")
 
 # =========================================================
-# WEBHOOK SECRET VALIDATION (optional but recommended)
+# WEBHOOK SIGNATURE VALIDATION
 # =========================================================
 
-def verify_signature(body: bytes, signature_header: str | None) -> bool:
-    """Return True if signature matches or no secret is configured."""
+def verify_github_signature(body: bytes, signature_header: str | None) -> bool:
+    """
+    Returns True  → validation passed (or WEBHOOK_SECRET not configured → skip).
+    Returns False → bad/missing signature → caller returns 401.
+    """
     if not WEBHOOK_SECRET:
-        return True  # Secret not configured, skip check
-    if not signature_header or not signature_header.startswith("sha256="):
+        logger.info("[webhook] WEBHOOK_SECRET not set — skipping signature validation")
+        return True
+
+    if not signature_header:
+        logger.warning("[webhook] Signature FAILED — X-Hub-Signature-256 header missing")
         return False
+
+    if not signature_header.startswith("sha256="):
+        logger.warning(
+            "[webhook] Signature FAILED — unexpected format: %s",
+            signature_header[:20],
+        )
+        return False
+
     expected = "sha256=" + hmac.new(
         WEBHOOK_SECRET.encode(), body, hashlib.sha256
     ).hexdigest()
-    return hmac.compare_digest(expected, signature_header)
 
-# =========================================================
-# WEBHOOK ENDPOINT
-# =========================================================
+    valid = hmac.compare_digest(expected, signature_header)
 
-@app.post("/webhook")
-async def webhook(request: Request, background_tasks: BackgroundTasks, debug: bool = False):
-    body = await request.body()
-
-    # ✅ FIX: return a proper 400 instead of a silent "ok" on empty body
-    if not body:
-        raise HTTPException(
-            status_code=400,
-            detail="Empty request body. Send a real GitHub webhook payload."
+    if valid:
+        logger.info("[webhook] Signature PASSED ✓")
+    else:
+        logger.warning(
+            "[webhook] Signature FAILED — received=%s | expected=%s",
+            signature_header[:20], expected[:20],
         )
 
-    # Validate GitHub webhook signature if secret is set
-    signature = request.headers.get("X-Hub-Signature-256")
-    if not verify_signature(body, signature):
-        logger.warning("Invalid webhook signature — request rejected")
-        raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+    return valid
 
+# =========================================================
+# WEBHOOK ENDPOINT  (thin HTTP layer — never blocks on LLM)
+# =========================================================
+
+@app.post("/webhook", status_code=200)
+async def webhook(request: Request, background_tasks: BackgroundTasks):
+    """
+    Thin HTTP layer only:
+      1. Read raw body
+      2. Validate GitHub signature
+      3. Parse JSON
+      4. Defensive field checks + structured logging
+      5. Ignore non-PR events → return immediately
+      6. Queue background task → return 200 immediately
+         (GitHub must get a response before LLM finishes)
+    """
+
+    # ── 1. Read body ──────────────────────────────────────────────────
+    body = await request.body()
+    if not body:
+        logger.warning("[webhook] Empty body received — returning 400")
+        raise HTTPException(
+            status_code=400,
+            detail="Empty request body. Expecting a GitHub webhook payload.",
+        )
+
+    # ── 2. Signature validation ───────────────────────────────────────
+    signature_header = request.headers.get("X-Hub-Signature-256")
+    if not verify_github_signature(body, signature_header):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing webhook signature.",
+        )
+
+    # ── 3. Parse JSON ─────────────────────────────────────────────────
     try:
         payload = await request.json()
     except Exception:
+        logger.warning("[webhook] Failed to parse JSON body")
         raise HTTPException(status_code=400, detail="Invalid JSON body.")
 
+    # ── 4. Defensive field extraction + structured logging ────────────
+    action     = payload.get("action")
+    repository = payload.get("repository") or {}
+    repo       = repository.get("full_name", "unknown")
+    pr_data    = payload.get("pull_request") or {}
+    pr_number  = pr_data.get("number", "unknown")
+
+    logger.info(
+        "[webhook] Event received | repo=%s | PR=#%s | action=%s | has_pull_request=%s",
+        repo,
+        pr_number,
+        action,
+        "pull_request" in payload,
+    )
+
+    # ── 5. Ignore non-PR events ───────────────────────────────────────
     if "pull_request" not in payload:
+        logger.info("[webhook] Ignored — not a pull_request event | action=%s", action)
         return {"status": "ignored", "reason": "not a pull_request event"}
 
-    repo      = payload["repository"]["full_name"]
-    pr_number = payload["pull_request"]["number"]
-    action    = payload.get("action")
+    # ── 6. Log action detail and queue background task ────────────────
+    logger.info(
+        "[webhook] PR event | repo=%s | PR=#%s | action=%s | will_process=%s",
+        repo,
+        pr_number,
+        action,
+        action in ALLOWED_ACTIONS,
+    )
 
-    logger.info("Webhook received | repo=%s | PR=#%d | action=%s", repo, pr_number, action)
-
-    if debug:
-        # Synchronous path — useful for testing; returns LLM output directly
-        logger.info("Debug mode — running synchronously")
-        review = review_pr(repo, pr_number)
-        return {"status": "debug_complete", "pr": pr_number, "llm_review": review}
-
-    # Normal production path — run in background so GitHub doesn't time out
     background_tasks.add_task(process_pr, payload)
-    return {"status": "processing", "pr": pr_number, "action": action}
+    logger.info("[webhook] Background task queued | repo=%s | PR=#%s", repo, pr_number)
+
+    return {
+        "status": "queued",
+        "repo":   repo,
+        "pr":     pr_number,
+        "action": action,
+    }
 
 # =========================================================
 # TEST ENDPOINTS
@@ -281,8 +411,9 @@ def test_llm():
 @app.get("/test-pr")
 def test_pr(repo: str, pr: int):
     """
-    Manually trigger a review for any PR.
-    Example: /test-pr?repo=youruser/yourrepo&pr=4
+    Manually trigger a synchronous review for any PR.
+    Used by the dashboard UI and for direct debugging.
+    Example: /test-pr?repo=sherif2004/PSO_TSP&pr=4
     """
     if not GITHUB_TOKEN:
         raise HTTPException(status_code=500, detail="GITHUB_TOKEN not set.")
@@ -296,4 +427,3 @@ def test_pr(repo: str, pr: int):
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
-
